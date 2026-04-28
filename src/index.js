@@ -16,18 +16,20 @@ const app = express();
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 
 const allowedOrigins = [
-  "https://trustpayv2.lovable.app",                                          // published
-  "https://id-preview--2ffae9e3-93d2-46f5-953d-9634f8aadc2c.lovable.app",  // preview
-  /\.lovable\.app$/,                                                          // any lovable subdomain
-  "http://localhost:5173",                                                    // local dev
+  "https://trustpayv2.lovable.app", // published
+  "https://id-preview--2ffae9e3-93d2-46f5-953d-9634f8aadc2c.lovable.app", // preview
+  /\.lovable\.app$/, // any lovable subdomain
+  "http://localhost:5173", // local dev
 ];
 
-app.use(cors({
-  origin: allowedOrigins,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: false,
-}));
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: false,
+  }),
+);
 
 app.options("*", cors()); // handle preflight for all routes
 
@@ -47,6 +49,7 @@ app.use((rq, res, next) => {
 
 app.use("/webhooks/whatsapp", whatsappWebhook); // Meta Cloud API webhook
 app.use("/pay", paymentRoute); // One-time payment page
+app.use("/api/pay", paymentRoute); // One-time payment page
 app.use("/admin", dashboardRoute); // Internal admin API
 
 app.get("/health", (_, res) => {
