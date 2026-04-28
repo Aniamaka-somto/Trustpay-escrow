@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import cors from "cors";
 
 import whatsappWebhook from "./webhooks/whatsapp.js";
 import paystackWebhook from "./webhooks/paystack.js";
@@ -13,6 +14,22 @@ import logger from "./utils/logger.js";
 const app = express();
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
+
+const allowedOrigins = [
+  "https://trustpayv2.lovable.app",                                          // published
+  "https://id-preview--2ffae9e3-93d2-46f5-953d-9634f8aadc2c.lovable.app",  // preview
+  /\.lovable\.app$/,                                                          // any lovable subdomain
+  "http://localhost:5173",                                                    // local dev
+];
+
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: false,
+}));
+
+app.options("*", cors()); // handle preflight for all routes
 
 // Paystack needs raw body for signature verification — must come before json()
 app.use("/webhooks/paystack", paystackWebhook);
