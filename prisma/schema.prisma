@@ -1,0 +1,168 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                 String   @id @default(uuid())
+  phoneNumber        String   @unique @map("phone_number")
+  fullName           String?  @map("full_name")
+  bankName           String?  @map("bank_name")
+  accountNumber      String?  @map("account_number")
+  trustScore         Int      @default(100) @map("trust_score")
+  totalTransactions  Int      @default(0) @map("total_transactions")
+  disputesRaised     Int      @default(0) @map("disputes_raised")
+  onboarded          Boolean  @default(false)
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  // Relations
+  salesTransactions      Transaction[] @relation("Seller")
+  purchaseTransactions   Transaction[] @relation("Buyer")
+  disputesOpened         Dispute[]     @relation("DisputeRaisedBy")
+  evidenceSubmitted      DisputeEvidence[]
+  ratingsGiven           Rating[]      @relation("RatedBy")
+  ratingsReceived        Rating[]      @relation("RatedUser")
+  notifications          Notification[]
+
+  @@map("users")
+}
+
+model Transaction {
+  id                   String    @id @default(uuid())
+  dealCode             String    @unique @map("deal_code")
+  sellerId             String    @map("seller_id")
+  buyerId              String?   @map("buyer_id")
+  itemDescription      String    @map("item_description")
+  amountKobo           BigInt    @map("amount_kobo")
+  feeKobo              BigInt    @map("fee_kobo")
+  status               TxStatus  @default(PENDING)
+  deliveryDays         Int       @default(3) @map("delivery_days")
+  paystackRef          String?   @map("paystack_ref")
+  paymentLinkToken     String?   @map("payment_link_token")
+  paymentLinkExpiresAt DateTime? @map("payment_link_expires_at")
+  fundedAt             DateTime? @map("funded_at")
+  confirmedAt          DateTime? @map("confirmed_at")
+  releasedAt           DateTime? @map("released_at")
+  autoReleaseAt        DateTime? @map("auto_release_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  seller        User      @relation("Seller", fields: [sellerId], references: [id])
+  buyer         User?     @relation("Buyer", fields: [buyerId], references: [id])
+  dispute       Dispute?
+  ratings       Rating[]
+  notifications Notification[]
+
+  @@index([dealCode])
+  @@index([sellerId])
+  @@index([buyerId])
+  @@index([status])
+  @@map("transactions")
+}
+
+model Dispute {
+  id            String        @id @default(uuid())
+  transactionId String        @unique @map("transaction_id")
+  raisedById    String        @map("raised_by")
+  reason        String
+  status        DisputeStatus @default(OPEN)
+  aiRuling      AiRuling?     @map("ai_ruling")
+  aiReasoning   String?       @map("ai_reasoning")
+  aiConfidence  Int?          @map("ai_confidence")
+  resolvedAt    DateTime?     @map("resolved_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  transaction Transaction       @relation(fields: [transactionId], references: [id])
+  raisedBy    User              @relation("DisputeRaisedBy", fields: [raisedById], references: [id])
+  evidence    DisputeEvidence[]
+
+  @@map("disputes")
+}
+
+model DisputeEvidence {
+  id          String       @id @default(uuid())
+  disputeId   String       @map("dispute_id")
+  submittedBy String       @map("submitted_by")
+  type        EvidenceType @default(TEXT)
+  fileUrl     String?      @map("file_url")
+  description String?
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  // Relations
+  dispute   Dispute @relation(fields: [disputeId], references: [id])
+  submitter User    @relation(fields: [submittedBy], references: [id])
+
+  @@map("dispute_evidence")
+}
+
+model Rating {
+  id            String   @id @default(uuid())
+  transactionId String   @map("transaction_id")
+  ratedById     String   @map("rated_by")
+  ratedUserId   String   @map("rated_user")
+  score         Int
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  ratedBy     User        @relation("RatedBy", fields: [ratedById], references: [id])
+  ratedUser   User        @relation("RatedUser", fields: [ratedUserId], references: [id])
+
+  @@unique([transactionId, ratedById])
+  @@map("ratings")
+}
+
+model Notification {
+  id            String   @id @default(uuid())
+  userId        String   @map("user_id")
+  transactionId String?  @map("transaction_id")
+  message       String
+  channel       String   @default("whatsapp")
+  sent          Boolean  @default(false)
+  sentAt        DateTime? @map("sent_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user        User         @relation(fields: [userId], references: [id])
+  transaction Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@map("notifications")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum TxStatus {
+  PENDING
+  FUNDED
+  CONFIRMED
+  RELEASED
+  DISPUTED
+  REFUNDED
+  EXPIRED
+}
+
+enum DisputeStatus {
+  OPEN
+  AWAITING_SELLER
+  AI_REVIEW
+  RESOLVED_BUYER
+  RESOLVED_SELLER
+  ESCALATED
+}
+
+enum AiRuling {
+  BUYER
+  SELLER
+  INCONCLUSIVE
+}
+
+enum EvidenceType {
+  IMAGE
+  TEXT
+  DOCUMENT
+}
