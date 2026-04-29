@@ -5,6 +5,39 @@ import { formatNaira } from "../utils/fees.js";
 
 const router = express.Router();
 
+// GET /:token.json — JSON API for deal data (clean contract for frontend/mobile)
+router.get("/:token.json", async (req, res) => {
+  try {
+    const tx = await prisma.transaction.findFirst({
+      where: {
+        paymentLinkToken: req.params.token,
+        paymentLinkExpiresAt: { gt: new Date() },
+        status: "PENDING",
+      },
+      include: { seller: true, buyer: true },
+    });
+
+    if (!tx) return res.status(410).json({ error: "expired" });
+
+    const amountKobo = Number(tx.amountKobo);
+    const feeKobo = Number(tx.feeKobo);
+
+    res.json({
+      dealCode: tx.dealCode,
+      sellerName: tx.seller.fullName,
+      item: tx.itemDescription,
+      itemPrice: amountKobo,
+      escrowFee: feeKobo,
+      total: amountKobo + feeKobo,
+      deliveryDays: tx.deliveryDays,
+      expiresAt: tx.paymentLinkExpiresAt.toISOString(),
+      currency: "NGN",
+    });
+  } catch (err) {
+    logger.error("Error fetching deal JSON:", err);
+    res.status(500).json({ error: "server_error" });
+  }
+});
 // GET /pay/:token — render the payment page
 router.get("/:token", async (req, res) => {
   const tx = await prisma.transaction.findFirst({
