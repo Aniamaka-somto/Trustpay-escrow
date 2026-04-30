@@ -85,7 +85,7 @@ export const handleMessage = async (
       return handleCancelSelection(phone, user, input, session);
     }
 
-    const handleCancelSelection = async (phone, user, input, session) => {
+    async function handleCancelSelection(phone, user, input, session) {
       const index = parseInt(input) - 1;
       if (isNaN(index) || index < 0 || index >= session.data.deals.length) {
         return sendMessage(
@@ -108,7 +108,7 @@ export const handleMessage = async (
         `✅ Deal *${dealCode}* has been cancelled.\n\n` +
           `Type *NEW DEAL* to create a new one.`,
       );
-    };
+    }
 
     if (upper.startsWith("RATE ")) {
       const score = parseInt(upper.split(" ")[1]);
@@ -390,7 +390,7 @@ const handleRating = async (phone, user, score) => {
   sendMessage(phone, msg.ratingSaved(score, tx.seller.fullName));
   // ─── MY DEALS ─────────────────────────────────────────────────────────────────
 
-  const handleMyDeals = async (phone, user) => {
+  async function handleMyDeals(phone, user) {
     const [selling, buying] = await Promise.all([
       // Active deals as seller
       prisma.transaction.findMany({
@@ -466,11 +466,11 @@ const handleRating = async (phone, user, score) => {
     reply += `_Type *CANCEL DEAL* to cancel a pending deal_`;
 
     sendMessage(phone, reply);
-  };
+  }
 
   // ─── CANCEL DEAL ──────────────────────────────────────────────────────────────
 
-  const handleCancelDeal = async (phone, user) => {
+  async function handleCancelDeal(phone, user) {
     // Find most recent PENDING deal where user is seller
     const tx = await prisma.transaction.findFirst({
       where: {
@@ -526,5 +526,5 @@ const handleRating = async (phone, user, score) => {
         `${tx.itemDescription} — ${formatNaira(tx.amountKobo)}\n\n` +
         `Type *NEW DEAL* to create a new one.`,
     );
-  };
+  }
 };
