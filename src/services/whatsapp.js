@@ -108,9 +108,17 @@ export const msg = {
 
   dealPreview: (tx) => {
     const total = BigInt(tx.amountKobo) + BigInt(tx.feeKobo);
+    const trustEmoji =
+      tx.seller.trustScore >= 80
+        ? "🟢"
+        : tx.seller.trustScore >= 60
+          ? "🟡"
+          : "🔴";
     return (
       `🔍 Deal found!\n\n` +
       `👤 Seller: *${tx.seller.fullName}*\n` +
+      `${trustEmoji} Trust Score: *${tx.seller.trustScore}/100* ` +
+      `(${tx.seller.totalTransactions} trades)\n` +
       `📦 Item: ${tx.itemDescription}\n` +
       `💰 Price: ${formatNaira(tx.amountKobo)}\n` +
       `📋 Fee (1.5%): ${formatNaira(tx.feeKobo)}\n` +
@@ -254,9 +262,12 @@ export const msg = {
     `Here's what you can do:\n\n` +
     `• *NEW DEAL* — start an escrow deal\n` +
     `• *TP-XXXXXX* — join a deal as buyer\n` +
+    `• *MY DEALS* — view your active deals\n` +
     `• *RECEIVED* — confirm delivery\n` +
     `• *DISPUTE* — raise a problem\n` +
-    `• *RATE 1-5* — rate a completed transaction`,
+    `• *CANCEL DEAL* — cancel a pending deal\n` +
+    `• *RATE 1-5* — rate a completed transaction\n\n` +
+    `Need help? Contact support: wa.me/YOUR_SUPPORT_NUMBER`,
 
   error: () => `Something went wrong on our end. Please try again in a moment.`,
 };

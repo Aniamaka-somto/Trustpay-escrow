@@ -79,6 +79,36 @@ export const handleMessage = async (
     if (upper === "DISPUTE") return handleOpenDispute(phone, user);
     if (upper === "RESPOND") return handleSellerRespond(phone, user);
     if (upper === "DONE") return handleEvidenceDone(phone, user, session);
+    if (upper === "MY DEALS") return handleMyDeals(phone, user);
+    if (upper === "CANCEL DEAL") return handleCancelDeal(phone, user, session);
+    if (session.step === "awaiting_cancel") {
+      return handleCancelSelection(phone, user, input, session);
+    }
+
+    const handleCancelSelection = async (phone, user, input, session) => {
+      const index = parseInt(input) - 1;
+      if (isNaN(index) || index < 0 || index >= session.data.deals.length) {
+        return sendMessage(
+          phone,
+          `❌ Please reply with a number between 1 and ${session.data.deals.length}`,
+        );
+      }
+
+      const dealId = session.data.deals[index];
+      const dealCode = session.data.codes[index];
+
+      await prisma.transaction.update({
+        where: { id: dealId },
+        data: { status: "EXPIRED" },
+      });
+
+      clearSession(phone);
+      sendMessage(
+        phone,
+        `✅ Deal *${dealCode}* has been cancelled.\n\n` +
+          `Type *NEW DEAL* to create a new one.`,
+      );
+    };
 
     if (upper.startsWith("RATE ")) {
       const score = parseInt(upper.split(" ")[1]);
@@ -358,4 +388,143 @@ const handleRating = async (phone, user, score) => {
     },
   });
   sendMessage(phone, msg.ratingSaved(score, tx.seller.fullName));
+  // ─── MY DEALS ─────────────────────────────────────────────────────────────────
+
+  const handleMyDeals = async (phone, user) => {
+    const [selling, buying] = await Promise.all([
+      // Active deals as seller
+      prisma.transaction.findMany({
+        where: {
+          sellerId: user.id,
+          status: { in: ["PENDING", "FUNDED", "DISPUTED"] },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+      // Active deals as buyer
+      prisma.transaction.findMany({
+        where: {
+          buyerId: user.id,
+          status: { in: ["FUNDED", "DISPUTED"] },
+        },
+        include: { seller: true },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+    ]);
+
+    if (selling.length === 0 && buying.length === 0) {
+      return sendMessage(
+        phone,
+        `You have no active deals right now.\n\n` +
+          `• Type *NEW DEAL* to start selling\n` +
+          `• Enter a deal code to buy`,
+      );
+    }
+
+    let reply = `📋 *Your Active Deals*\n\n`;
+
+    if (selling.length > 0) {
+      reply += `*As Seller:*\n`;
+      for (const tx of selling) {
+        const statusEmoji =
+          {
+            PENDING: "⏳",
+            FUNDED: "💰",
+            DISPUTED: "⚠️",
+          }[tx.status] || "📦";
+
+        reply +=
+          `${statusEmoji} *${tx.dealCode}*\n` +
+          `   ${tx.itemDescription}\n` +
+          `   ${formatNaira(tx.amountKobo)} — ${tx.status}\n` +
+          (tx.status === "PENDING"
+            ? `   _(Waiting for buyer to pay)_\n`
+            : tx.status === "FUNDED"
+              ? `   _(Deliver within ${tx.deliveryDays} day(s))_\n`
+              : `   _(Dispute in progress)_\n`) +
+          `\n`;
+      }
+    }
+
+    if (buying.length > 0) {
+      reply += `*As Buyer:*\n`;
+      for (const tx of buying) {
+        const statusEmoji = tx.status === "FUNDED" ? "📦" : "⚠️";
+        reply +=
+          `${statusEmoji} *${tx.dealCode}*\n` +
+          `   ${tx.itemDescription}\n` +
+          `   From: ${tx.seller.fullName}\n` +
+          `   ${formatNaira(tx.amountKobo)} — ${tx.status}\n` +
+          (tx.status === "FUNDED"
+            ? `   _(Reply *RECEIVED* when item arrives)_\n`
+            : `   _(Dispute in progress)_\n`) +
+          `\n`;
+      }
+    }
+
+    reply += `_Type *CANCEL DEAL* to cancel a pending deal_`;
+
+    sendMessage(phone, reply);
+  };
+
+  // ─── CANCEL DEAL ──────────────────────────────────────────────────────────────
+
+  const handleCancelDeal = async (phone, user) => {
+    // Find most recent PENDING deal where user is seller
+    const tx = await prisma.transaction.findFirst({
+      where: {
+        sellerId: user.id,
+        status: "PENDING",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!tx) {
+      return sendMessage(
+        phone,
+        `❌ No cancellable deals found.\n\n` +
+          `You can only cancel deals that haven't been paid yet.\n` +
+          `Once a buyer pays, the deal cannot be cancelled.`,
+      );
+    }
+
+    // If seller has multiple pending deals, ask which one
+    const allPending = await prisma.transaction.findMany({
+      where: { sellerId: user.id, status: "PENDING" },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (allPending.length > 1) {
+      const list = allPending
+        .map(
+          (t, i) =>
+            `${i + 1}. *${t.dealCode}* — ${t.itemDescription} (${formatNaira(t.amountKobo)})`,
+        )
+        .join("\n");
+
+      setSession(phone, "awaiting_cancel", {
+        deals: allPending.map((t) => t.id),
+        codes: allPending.map((t) => t.dealCode),
+      });
+
+      return sendMessage(
+        phone,
+        `Which deal do you want to cancel?\n\n${list}\n\nReply with the number (1, 2, etc.)`,
+      );
+    }
+
+    // Only one pending deal — cancel it directly
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: { status: "EXPIRED" },
+    });
+
+    sendMessage(
+      phone,
+      `✅ Deal *${tx.dealCode}* has been cancelled.\n\n` +
+        `${tx.itemDescription} — ${formatNaira(tx.amountKobo)}\n\n` +
+        `Type *NEW DEAL* to create a new one.`,
+    );
+  };
 };
