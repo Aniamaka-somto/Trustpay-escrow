@@ -97,14 +97,20 @@ export const msg = {
   askDeliveryDays: () =>
     `How many days do you need to deliver after payment?\n\nExample: *2*`,
 
-  dealCreated: (tx) =>
-    `✅ Escrow deal created!\n\n` +
-    `📦 *${tx.itemDescription}*\n` +
-    `💰 Amount: ${formatNaira(tx.amountKobo)}\n` +
-    `🚚 Delivery: ${tx.deliveryDays} day(s)\n\n` +
-    `Your deal code is:\n\n` +
-    `*${tx.dealCode}*\n\n` +
-    `Send this code to your buyer on WhatsApp. They'll use it to pay into escrow.`,
+  dealCreated: (tx) => {
+    const botNumber = process.env.WHATSAPP_PHONE_ID_E164 || "15556365137";
+    const prefilledLink = `https://wa.me/${botNumber}?text=${tx.dealCode}`;
+    return (
+      `✅ Escrow deal created!\n\n` +
+      `📦 *${tx.itemDescription}*\n` +
+      `💰 Amount: ${formatNaira(tx.amountKobo)}\n` +
+      `🚚 Delivery: ${tx.deliveryDays} day(s)\n\n` +
+      `Your deal code is:\n\n` +
+      `*${tx.dealCode}*\n\n` +
+      `Send this link to your buyer — they just tap and send:\n` +
+      `${prefilledLink}`
+    );
+  },
 
   dealPreview: (tx) => {
     const total = BigInt(tx.amountKobo) + BigInt(tx.feeKobo);

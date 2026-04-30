@@ -23,36 +23,43 @@ export const handleMessage = async (
   messageType = "text",
   mediaId = null,
 ) => {
-  console.log("=== HANDLE MESSAGE ===", { phone, text, messageType });
-
   const input = (text || "").trim();
   const upper = input.replace(/\*/g, "").trim().toUpperCase();
   const session = getSession(phone);
 
   try {
-    console.log("=== DB LOOKUP START ===");
     let user = await prisma.user.findUnique({ where: { phoneNumber: phone } });
-    console.log(
-      "=== DB LOOKUP DONE ===",
-      user ? `found: ${user.id}` : "not found",
-    );
 
+    // ── NEW USER ──────────────────────────────────────────────────────────────
     if (!user) {
-      console.log("=== CREATING USER ===");
       user = await prisma.user.create({ data: { phoneNumber: phone } });
-      console.log("=== USER CREATED ===", user.id);
       setSession(phone, "awaiting_name");
-      console.log("=== SENDING WELCOME ===");
-      await sendMessage(phone, msg.welcome());
-      console.log("=== WELCOME SENT ===");
-      return;
+      return sendMessage(phone, msg.welcome());
     }
 
-    if (!user.onboarded) {
-      console.log("=== ONBOARDING FLOW ===", session.step);
-      return onboardingFlow(phone, user, input, session);
+    // ── IDEA 2: Minimal onboarding — only name needed to start ───────────────
+    if (!user.fullName) {
+      if (input.length < 2)
+        return sendMessage(phone, `Please enter your full name.`);
+      await prisma.user.update({
+        where: { phoneNumber: phone },
+        data: { fullName: input, onboarded: true },
+      });
+      clearSession(phone);
+      return sendMessage(phone, msg.askBankDetailsFirstTime(input));
     }
 
+    // ── AWAITING BANK DETAILS (only when about to receive money) ─────────────
+    if (session.step === "awaiting_bank_for_payout") {
+      return handleBankForPayout(phone, user, input, session);
+    }
+
+    // ── AWAITING BANK DETAILS (seller setup before first payout) ─────────────
+    if (session.step === "awaiting_bank_setup") {
+      return handleBankSetup(phone, user, input, session);
+    }
+
+    // ── EVIDENCE FLOW ─────────────────────────────────────────────────────────
     if (session.step === "collecting_evidence") {
       return evidenceFlow(
         phone,
@@ -65,14 +72,17 @@ export const handleMessage = async (
       );
     }
 
+    // ── NEW DEAL FLOW ─────────────────────────────────────────────────────────
     if (session.step.startsWith("new_deal_")) {
       return newDealFlow(phone, user, input, session);
     }
 
+    // ── CANCEL SELECTION ──────────────────────────────────────────────────────
     if (session.step === "awaiting_cancel") {
       return handleCancelSelection(phone, user, input, session);
     }
 
+    // ── GLOBAL COMMANDS ───────────────────────────────────────────────────────
     if (upper === "NEW DEAL") {
       setSession(phone, "new_deal_item", {});
       return sendMessage(phone, msg.askItem());
@@ -86,6 +96,9 @@ export const handleMessage = async (
     if (upper === "MY DEALS") return handleMyDeals(phone, user);
     if (upper === "CANCEL DEAL") return handleCancelDeal(phone, user);
 
+    // ── IDEA 5: Seller flags issue after buyer confirms ───────────────────────
+    if (upper === "FLAG") return handleSellerFlag(phone, user);
+
     if (upper.startsWith("RATE ")) {
       const score = parseInt(upper.split(" ")[1]);
       return handleRating(phone, user, score);
@@ -93,48 +106,50 @@ export const handleMessage = async (
 
     if (isDealCode(upper)) return handleBuyerJoin(phone, user, upper);
 
-    console.log("=== UNKNOWN COMMAND ===", upper);
     sendMessage(phone, msg.unknownCommand());
   } catch (err) {
-    console.log("=== HANDLE MESSAGE ERROR ===", err.message);
-    console.log("=== ERROR STACK ===", err.stack);
     logger.error(`Message handler error for ${phone}:`, err);
     sendMessage(phone, msg.error());
   }
 };
 
-// ─── ONBOARDING ───────────────────────────────────────────────────────────────
+// ─── IDEA 2: Bank setup only when needed ──────────────────────────────────────
 
-const onboardingFlow = async (phone, user, input, session) => {
-  if (
-    !session.step ||
-    session.step === "idle" ||
-    session.step === "awaiting_name"
-  ) {
-    if (input.length < 2)
-      return sendMessage(phone, `Please enter your full name.`);
-    setSession(phone, "awaiting_bank", { fullName: input });
-    return sendMessage(phone, msg.askBankDetails(input));
+const handleBankForPayout = async (phone, user, input, session) => {
+  const parts = input.split("/").map((p) => p.trim());
+  if (parts.length !== 2 || !/^\d{10}$/.test(parts[1])) {
+    return sendMessage(phone, msg.invalidBankFormat());
   }
+  const [bankName, accountNumber] = parts;
+  await prisma.user.update({
+    where: { phoneNumber: phone },
+    data: { bankName, accountNumber },
+  });
+  clearSession(phone);
+  await sendMessage(phone, msg.bankDetailsSaved());
 
-  if (session.step === "awaiting_bank") {
-    const parts = input.split("/").map((p) => p.trim());
-    if (parts.length !== 2 || !/^\d{10}$/.test(parts[1])) {
-      return sendMessage(phone, msg.invalidBankFormat());
-    }
-    const [bankName, accountNumber] = parts;
-    await prisma.user.update({
-      where: { phoneNumber: phone },
-      data: {
-        fullName: session.data.fullName,
-        bankName,
-        accountNumber,
-        onboarded: true,
-      },
+  // Resume the payout that triggered this
+  if (session.data?.transactionId) {
+    const tx = await prisma.transaction.findUnique({
+      where: { id: session.data.transactionId },
+      include: { seller: true },
     });
-    clearSession(phone);
-    return sendMessage(phone, msg.onboardingComplete(session.data.fullName));
+    if (tx) await executePayout(tx, { ...user, bankName, accountNumber });
   }
+};
+
+const handleBankSetup = async (phone, user, input, session) => {
+  const parts = input.split("/").map((p) => p.trim());
+  if (parts.length !== 2 || !/^\d{10}$/.test(parts[1])) {
+    return sendMessage(phone, msg.invalidBankFormat());
+  }
+  const [bankName, accountNumber] = parts;
+  await prisma.user.update({
+    where: { phoneNumber: phone },
+    data: { bankName, accountNumber },
+  });
+  clearSession(phone);
+  return sendMessage(phone, msg.onboardingComplete(user.fullName));
 };
 
 // ─── NEW DEAL FLOW ────────────────────────────────────────────────────────────
@@ -211,7 +226,7 @@ const handleAgree = async (phone, user, session) => {
   return sendMessage(phone, msg.paymentLink(token, tx.dealCode), tx.id);
 };
 
-// ─── CONFIRM DELIVERY ─────────────────────────────────────────────────────────
+// ─── IDEA 5: Confirm delivery with seller buffer ──────────────────────────────
 
 const handleConfirmDelivery = async (phone, user) => {
   const tx = await prisma.transaction.findFirst({
@@ -220,15 +235,82 @@ const handleConfirmDelivery = async (phone, user) => {
     orderBy: { fundedAt: "desc" },
   });
   if (!tx) return sendMessage(phone, msg.noActiveDeal());
+
+  // Mark as CONFIRMED — seller has 1 hour to flag
   await prisma.transaction.update({
     where: { id: tx.id },
-    data: { status: "CONFIRMED", confirmedAt: new Date() },
+    data: {
+      status: "CONFIRMED",
+      confirmedAt: new Date(),
+      // auto_release_at repurposed as "flag deadline" — 1 hour from now
+      autoReleaseAt: new Date(Date.now() + 60 * 60 * 1000),
+    },
   });
+
+  // Notify both parties
+  await sendMessage(phone, msg.deliveryConfirmedBuyer(tx), tx.id);
+  await sendMessage(
+    tx.seller.phoneNumber,
+    msg.deliveryConfirmedSeller(tx),
+    tx.id,
+  );
+};
+
+// ─── IDEA 5: Seller flags issue ───────────────────────────────────────────────
+
+const handleSellerFlag = async (phone, user) => {
+  // Find a CONFIRMED deal where seller has 1 hour window still open
+  const tx = await prisma.transaction.findFirst({
+    where: {
+      sellerId: user.id,
+      status: "CONFIRMED",
+      autoReleaseAt: { gt: new Date() },
+    },
+    include: { buyer: true },
+    orderBy: { confirmedAt: "desc" },
+  });
+
+  if (!tx) {
+    return sendMessage(
+      phone,
+      `❌ No flaggable deals found.\n\n` +
+        `You can only flag an issue within 1 hour of the buyer confirming delivery.`,
+    );
+  }
+
+  // Move back to disputed
+  await prisma.transaction.update({
+    where: { id: tx.id },
+    data: { status: "DISPUTED" },
+  });
+
+  setSession(phone, "collecting_evidence", {
+    transactionId: tx.id,
+    disputeId: null,
+    isSeller: true,
+  });
+
+  await sendMessage(phone, msg.sellerFlaggedIssue(tx), tx.id);
+  await sendMessage(tx.buyer.phoneNumber, msg.sellerFlagNotifBuyer(tx), tx.id);
+};
+
+// ─── PAYOUT HELPER ────────────────────────────────────────────────────────────
+
+const executePayout = async (tx, seller) => {
+  // Check seller has bank details — if not, ask for them
+  if (!seller.bankName || !seller.accountNumber) {
+    await sendMessage(seller.phoneNumber, msg.askBankDetailsNow());
+    setSession(seller.phoneNumber, "awaiting_bank_for_payout", {
+      transactionId: tx.id,
+    });
+    return;
+  }
+
   try {
     await payoutToBank({
-      name: tx.seller.fullName,
-      accountNumber: tx.seller.accountNumber,
-      bankName: tx.seller.bankName,
+      name: seller.fullName,
+      accountNumber: seller.accountNumber,
+      bankName: seller.bankName,
       amountKobo: tx.amountKobo,
       reference: `TP-PAYOUT-${tx.dealCode}-${Date.now()}`,
       reason: `TrustPay escrow release — ${tx.dealCode}`,
@@ -237,11 +319,10 @@ const handleConfirmDelivery = async (phone, user) => {
       where: { id: tx.id },
       data: { status: "RELEASED", releasedAt: new Date() },
     });
+    await sendMessage(seller.phoneNumber, msg.fundsReleasedSeller(tx), tx.id);
   } catch (err) {
     logger.error(`Payout failed for ${tx.dealCode}:`, err.message);
   }
-  await sendMessage(phone, msg.fundsReleasedBuyer(tx), tx.id);
-  await sendMessage(tx.seller.phoneNumber, msg.fundsReleasedSeller(tx), tx.id);
 };
 
 // ─── DISPUTE FLOW ─────────────────────────────────────────────────────────────
@@ -345,13 +426,16 @@ const handleMyDeals = async (phone, user) => {
     prisma.transaction.findMany({
       where: {
         sellerId: user.id,
-        status: { in: ["PENDING", "FUNDED", "DISPUTED"] },
+        status: { in: ["PENDING", "FUNDED", "CONFIRMED", "DISPUTED"] },
       },
       orderBy: { createdAt: "desc" },
       take: 5,
     }),
     prisma.transaction.findMany({
-      where: { buyerId: user.id, status: { in: ["FUNDED", "DISPUTED"] } },
+      where: {
+        buyerId: user.id,
+        status: { in: ["FUNDED", "CONFIRMED", "DISPUTED"] },
+      },
       include: { seller: true },
       orderBy: { createdAt: "desc" },
       take: 5,
@@ -373,7 +457,9 @@ const handleMyDeals = async (phone, user) => {
     reply += `*As Seller:*\n`;
     for (const tx of selling) {
       const statusEmoji =
-        { PENDING: "⏳", FUNDED: "💰", DISPUTED: "⚠️" }[tx.status] || "📦";
+        { PENDING: "⏳", FUNDED: "💰", CONFIRMED: "🕐", DISPUTED: "⚠️" }[
+          tx.status
+        ] || "📦";
       reply +=
         `${statusEmoji} *${tx.dealCode}*\n` +
         `   ${tx.itemDescription}\n` +
@@ -382,7 +468,9 @@ const handleMyDeals = async (phone, user) => {
           ? `   _(Waiting for buyer to pay)_\n`
           : tx.status === "FUNDED"
             ? `   _(Deliver within ${tx.deliveryDays} day(s))_\n`
-            : `   _(Dispute in progress)_\n`) +
+            : tx.status === "CONFIRMED"
+              ? `   _(Buyer confirmed — payout pending)_\n`
+              : `   _(Dispute in progress)_\n`) +
         `\n`;
     }
   }
@@ -390,7 +478,8 @@ const handleMyDeals = async (phone, user) => {
   if (buying.length > 0) {
     reply += `*As Buyer:*\n`;
     for (const tx of buying) {
-      const statusEmoji = tx.status === "FUNDED" ? "📦" : "⚠️";
+      const statusEmoji =
+        { FUNDED: "📦", CONFIRMED: "🕐", DISPUTED: "⚠️" }[tx.status] || "📦";
       reply +=
         `${statusEmoji} *${tx.dealCode}*\n` +
         `   ${tx.itemDescription}\n` +
@@ -398,7 +487,9 @@ const handleMyDeals = async (phone, user) => {
         `   ${formatNaira(tx.amountKobo)} — ${tx.status}\n` +
         (tx.status === "FUNDED"
           ? `   _(Reply *RECEIVED* when item arrives)_\n`
-          : `   _(Dispute in progress)_\n`) +
+          : tx.status === "CONFIRMED"
+            ? `   _(Payout processing — 1hr seller window)_\n`
+            : `   _(Dispute in progress)_\n`) +
         `\n`;
     }
   }
@@ -438,7 +529,6 @@ const handleCancelDeal = async (phone, user) => {
     );
   }
 
-  // Multiple pending deals — ask which one
   const list = allPending
     .map(
       (t, i) =>
