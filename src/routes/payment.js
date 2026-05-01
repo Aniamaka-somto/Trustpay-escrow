@@ -2,10 +2,11 @@ import express from "express";
 import prisma from "../utils/prisma.js";
 import { initializePayment } from "../services/paystack.js";
 import { formatNaira } from "../utils/fees.js";
+import logger from "../utils/logger.js";
 
 const router = express.Router();
 
-// GET /:token.json — JSON API for deal data (clean contract for frontend/mobile)
+// GET /:token.json — JSON API for deal data
 router.get("/:token.json", async (req, res) => {
   try {
     const tx = await prisma.transaction.findFirst({
@@ -34,107 +35,135 @@ router.get("/:token.json", async (req, res) => {
       currency: "NGN",
     });
   } catch (err) {
-    logger.error("Error fetching deal JSON:", err);
+    logger.error(`Error fetching deal JSON: ${err.message}`);
     res.status(500).json({ error: "server_error" });
   }
 });
-// GET /pay/:token — render the payment page
+
+// GET /:token — render the payment page
 router.get("/:token", async (req, res) => {
-  const tx = await prisma.transaction.findFirst({
-    where: {
-      paymentLinkToken: req.params.token,
-      paymentLinkExpiresAt: { gt: new Date() },
-      status: "PENDING",
-    },
-    include: { seller: true },
-  });
+  try {
+    const tx = await prisma.transaction.findFirst({
+      where: {
+        paymentLinkToken: req.params.token,
+        paymentLinkExpiresAt: { gt: new Date() },
+        status: "PENDING",
+      },
+      include: { seller: true },
+    });
 
-  if (!tx) return res.status(410).send(expiredPage());
+    if (!tx) return res.status(410).send(expiredPage());
 
-  const total = BigInt(tx.amountKobo) + BigInt(tx.feeKobo);
-  const expiry = new Date(tx.paymentLinkExpiresAt).toLocaleTimeString("en-NG", {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+    const total = BigInt(tx.amountKobo) + BigInt(tx.feeKobo);
+    const expiry = new Date(tx.paymentLinkExpiresAt).toLocaleTimeString(
+      "en-NG",
+      {
+        hour: "2-digit",
+        minute: "2-digit",
+      },
+    );
 
-  res.send(payPage(tx, total, expiry, req.params.token));
+    res.send(payPage(tx, total, expiry, req.params.token));
+  } catch (err) {
+    logger.error(`Error rendering payment page: ${err.message}`);
+    res.status(500).send("<p>Something went wrong. Please try again.</p>");
+  }
 });
 
-// POST /pay/:token/charge — initialize Paystack payment
+// POST /:token/charge — initialize Paystack payment
 router.post("/:token/charge", async (req, res) => {
-  const tx = await prisma.transaction.findFirst({
-    where: {
-      paymentLinkToken: req.params.token,
-      paymentLinkExpiresAt: { gt: new Date() },
-      status: "PENDING",
-    },
-    include: { buyer: true },
-  });
+  try {
+    const tx = await prisma.transaction.findFirst({
+      where: {
+        paymentLinkToken: req.params.token,
+        paymentLinkExpiresAt: { gt: new Date() },
+        status: "PENDING",
+      },
+      include: { buyer: true },
+    });
 
-  if (!tx) return res.status(410).json({ error: "Link expired" });
+    if (!tx) return res.status(410).json({ error: "Link expired" });
 
-  const total = BigInt(tx.amountKobo) + BigInt(tx.feeKobo);
-  const email = `${tx.buyer.phoneNumber}@pay.trustpay.ng`;
+    const total = BigInt(tx.amountKobo) + BigInt(tx.feeKobo);
+    const email = `${tx.buyer.phoneNumber}@pay.trustpay.ng`;
 
-  const data = await initializePayment({
-    email,
-    amountKobo: total,
-    reference: `TP-${tx.dealCode}-${Date.now()}`,
-    metadata: { transactionId: tx.id, dealCode: tx.dealCode },
-  });
+    const data = await initializePayment({
+      email,
+      amountKobo: total,
+      reference: `TP-${tx.dealCode}-${Date.now()}`,
+      metadata: { transactionId: tx.id, dealCode: tx.dealCode },
+    });
 
-  res.json({ authorizationUrl: data.authorization_url });
+    res.json({ authorizationUrl: data.authorization_url });
+  } catch (err) {
+    logger.error(`Charge initialization error: ${err.message}`);
+    res
+      .status(500)
+      .json({ error: "Payment initialization failed. Please try again." });
+  }
 });
 
-// JSON API for Lovable — GET /api/pay/:token
+// GET /api/:token — JSON API for Lovable
 router.get("/api/:token", async (req, res) => {
-  const tx = await prisma.transaction.findFirst({
-    where: {
-      paymentLinkToken: req.params.token,
-      paymentLinkExpiresAt: { gt: new Date() },
-      status: "PENDING",
-    },
-    include: { seller: true },
-  });
+  try {
+    const tx = await prisma.transaction.findFirst({
+      where: {
+        paymentLinkToken: req.params.token,
+        paymentLinkExpiresAt: { gt: new Date() },
+        status: "PENDING",
+      },
+      include: { seller: true },
+    });
 
-  if (!tx) return res.status(410).json({ error: "expired" });
+    if (!tx) return res.status(410).json({ error: "expired" });
 
-  res.json({
-    dealCode: tx.dealCode,
-    sellerName: tx.seller.fullName,
-    item: tx.itemDescription,
-    amountKobo: Number(tx.amountKobo),
-    feeKobo: Number(tx.feeKobo),
-    totalKobo: Number(tx.amountKobo) + Number(tx.feeKobo),
-    deliveryDays: tx.deliveryDays,
-    expiresAt: tx.paymentLinkExpiresAt,
-  });
+    res.json({
+      dealCode: tx.dealCode,
+      sellerName: tx.seller.fullName,
+      item: tx.itemDescription,
+      amountKobo: Number(tx.amountKobo),
+      feeKobo: Number(tx.feeKobo),
+      totalKobo: Number(tx.amountKobo) + Number(tx.feeKobo),
+      deliveryDays: tx.deliveryDays,
+      expiresAt: tx.paymentLinkExpiresAt,
+    });
+  } catch (err) {
+    logger.error(`Error fetching API deal: ${err.message}`);
+    res.status(500).json({ error: "server_error" });
+  }
 });
 
-// JSON API for Lovable — POST /api/pay/:token/charge
+// POST /api/:token/charge — JSON API for Lovable
 router.post("/api/:token/charge", async (req, res) => {
-  const tx = await prisma.transaction.findFirst({
-    where: {
-      paymentLinkToken: req.params.token,
-      paymentLinkExpiresAt: { gt: new Date() },
-      status: "PENDING",
-    },
-    include: { buyer: true },
-  });
+  try {
+    const tx = await prisma.transaction.findFirst({
+      where: {
+        paymentLinkToken: req.params.token,
+        paymentLinkExpiresAt: { gt: new Date() },
+        status: "PENDING",
+      },
+      include: { buyer: true },
+    });
 
-  if (!tx) return res.status(410).json({ error: "expired" });
+    if (!tx) return res.status(410).json({ error: "expired" });
 
-  const total = Number(tx.amountKobo) + Number(tx.feeKobo);
-  const email = `${tx.buyer.phoneNumber}@pay.trustpay.ng`;
+    const total = Number(tx.amountKobo) + Number(tx.feeKobo);
+    const email = `${tx.buyer.phoneNumber}@pay.trustpay.ng`;
 
-  const data = await initializePayment({
-    email,
-    amountKobo: total,
-    reference: `TP-${tx.dealCode}-${Date.now()}`,
-    metadata: { transactionId: tx.id, dealCode: tx.dealCode },
-  });
+    const data = await initializePayment({
+      email,
+      amountKobo: total,
+      reference: `TP-${tx.dealCode}-${Date.now()}`,
+      metadata: { transactionId: tx.id, dealCode: tx.dealCode },
+    });
 
-  res.json({ authorizationUrl: data.authorization_url });
+    res.json({ authorizationUrl: data.authorization_url });
+  } catch (err) {
+    logger.error(`API charge initialization error: ${err.message}`);
+    res
+      .status(500)
+      .json({ error: "Payment initialization failed. Please try again." });
+  }
 });
 
 // ─── PAGE TEMPLATES ───────────────────────────────────────────────────────────

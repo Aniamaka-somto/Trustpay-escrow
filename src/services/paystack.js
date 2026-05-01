@@ -3,10 +3,30 @@ import crypto from "crypto";
 import logger from "../utils/logger.js";
 
 const BASE = "https://api.paystack.co";
+
 const headers = () => ({
   Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
   "Content-Type": "application/json",
 });
+
+// ─── SANITIZE AXIOS ERRORS ────────────────────────────────────────────────────
+// Strip request config from all axios errors so secrets never appear in logs
+
+axios.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    delete err.config;
+    delete err.request;
+    return Promise.reject(err);
+  },
+);
+
+const paystackError = (fn, err) => {
+  const status = err.response?.status;
+  const message = err.response?.data?.message || err.message;
+  logger.error(`Paystack ${fn} failed: ${status ?? "network"} — ${message}`);
+  throw new Error(`${fn} failed: ${message}`);
+};
 
 // ─── PAYMENTS ─────────────────────────────────────────────────────────────────
 
@@ -16,25 +36,36 @@ export const initializePayment = async ({
   reference,
   metadata,
 }) => {
-  const { data } = await axios.post(
-    `${BASE}/transaction/initialize`,
-    {
-      email,
-      amount: Number(amountKobo),
-      reference,
-      metadata,
-      callback_url: `${process.env.APP_URL}/payment/callback`,
-    },
-    { headers: headers() },
-  );
-  return data.data; // { authorization_url, access_code, reference }
+  try {
+    const { data } = await axios.post(
+      `${BASE}/transaction/initialize`,
+      {
+        email,
+        amount: Number(amountKobo),
+        reference,
+        metadata,
+        callback_url: `${process.env.APP_URL}/payment/callback`,
+      },
+      { headers: headers() },
+    );
+    return data.data; // { authorization_url, access_code, reference }
+  } catch (err) {
+    paystackError("initializePayment", err);
+  }
 };
 
 export const verifyTransaction = async (reference) => {
-  const { data } = await axios.get(`${BASE}/transaction/verify/${reference}`, {
-    headers: headers(),
-  });
-  return data.data;
+  try {
+    const { data } = await axios.get(
+      `${BASE}/transaction/verify/${reference}`,
+      {
+        headers: headers(),
+      },
+    );
+    return data.data;
+  } catch (err) {
+    paystackError("verifyTransaction", err);
+  }
 };
 
 // ─── PAYOUTS ──────────────────────────────────────────────────────────────────
@@ -44,18 +75,22 @@ export const createTransferRecipient = async ({
   accountNumber,
   bankCode,
 }) => {
-  const { data } = await axios.post(
-    `${BASE}/transferrecipient`,
-    {
-      type: "nuban",
-      name,
-      account_number: accountNumber,
-      bank_code: bankCode,
-      currency: "NGN",
-    },
-    { headers: headers() },
-  );
-  return data.data;
+  try {
+    const { data } = await axios.post(
+      `${BASE}/transferrecipient`,
+      {
+        type: "nuban",
+        name,
+        account_number: accountNumber,
+        bank_code: bankCode,
+        currency: "NGN",
+      },
+      { headers: headers() },
+    );
+    return data.data;
+  } catch (err) {
+    paystackError("createTransferRecipient", err);
+  }
 };
 
 export const initiateTransfer = async ({
@@ -64,18 +99,22 @@ export const initiateTransfer = async ({
   reason,
   reference,
 }) => {
-  const { data } = await axios.post(
-    `${BASE}/transfer`,
-    {
-      source: "balance",
-      amount: Number(amountKobo),
-      recipient: recipientCode,
-      reason,
-      reference,
-    },
-    { headers: headers() },
-  );
-  return data.data;
+  try {
+    const { data } = await axios.post(
+      `${BASE}/transfer`,
+      {
+        source: "balance",
+        amount: Number(amountKobo),
+        recipient: recipientCode,
+        reason,
+        reference,
+      },
+      { headers: headers() },
+    );
+    return data.data;
+  } catch (err) {
+    paystackError("initiateTransfer", err);
+  }
 };
 
 // Full payout: create recipient → transfer
