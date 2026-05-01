@@ -1,4 +1,4 @@
-const FEE_RATE = 0.015;          // 1.5%
+const FEE_RATE = 0.025;          // 2.5%
 const FEE_CAP_KOBO = 500_000;   // ₦5,000 cap
 
 export const calculateFee = (amountKobo) => {
