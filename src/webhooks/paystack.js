@@ -39,7 +39,6 @@ router.post(
           break;
       }
     } catch (err) {
-      // Only log the message, never the full error object (may contain request data)
       logger.error(`Paystack webhook processing error: ${err.message}`);
     }
   },
@@ -51,6 +50,24 @@ const onChargeSuccess = async (data) => {
   const transactionId = data.metadata?.transactionId;
   if (!transactionId) {
     logger.warn("Paystack charge.success with no transactionId in metadata");
+    return;
+  }
+
+  // FIX: fetch deal first to verify amount before marking as funded
+  const deal = await prisma.transaction.findUnique({
+    where: { id: transactionId },
+  });
+
+  if (!deal) {
+    logger.warn(`Transaction ${transactionId} not found`);
+    return;
+  }
+
+  const expectedKobo = Number(deal.amountKobo) + Number(deal.feeKobo);
+  if (data.amount !== expectedKobo) {
+    logger.error(
+      `Amount mismatch on ${transactionId}: got ${data.amount}, expected ${expectedKobo} — NOT funding`,
+    );
     return;
   }
 
@@ -69,7 +86,7 @@ const onChargeSuccess = async (data) => {
 
   if (!tx) {
     logger.warn(
-      `Transaction ${transactionId} not found or not in PENDING state`,
+      `Transaction ${transactionId} not in PENDING state — skipping (idempotent)`,
     );
     return;
   }

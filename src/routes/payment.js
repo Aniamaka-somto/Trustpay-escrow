@@ -70,7 +70,7 @@ router.get("/:token", async (req, res) => {
   }
 });
 
-// POST /:token/charge — initialize Paystack payment
+// POST /:token/charge — initialize Paystack payment (used by the HTML page)
 router.post("/:token/charge", async (req, res) => {
   try {
     const tx = await prisma.transaction.findFirst({
@@ -84,14 +84,22 @@ router.post("/:token/charge", async (req, res) => {
 
     if (!tx) return res.status(410).json({ error: "Link expired" });
 
-    const total = BigInt(tx.amountKobo) + BigInt(tx.feeKobo);
+    const total = Number(tx.amountKobo) + Number(tx.feeKobo);
     const email = `${tx.buyer.phoneNumber}@pay.trustpay.ng`;
+    const reference = `TP-${tx.dealCode}-${Date.now()}`;
 
     const data = await initializePayment({
       email,
       amountKobo: total,
-      reference: `TP-${tx.dealCode}-${Date.now()}`,
+      reference,
       metadata: { transactionId: tx.id, dealCode: tx.dealCode },
+      callbackUrl: `${process.env.APP_URL}/payment/success`,
+    });
+
+    // Store reference for reconciliation
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: { paystackRef: reference },
     });
 
     res.json({ authorizationUrl: data.authorization_url });
@@ -149,12 +157,20 @@ router.post("/api/:token/charge", async (req, res) => {
 
     const total = Number(tx.amountKobo) + Number(tx.feeKobo);
     const email = `${tx.buyer.phoneNumber}@pay.trustpay.ng`;
+    const reference = `TP-${tx.dealCode}-${Date.now()}`;
 
     const data = await initializePayment({
       email,
       amountKobo: total,
-      reference: `TP-${tx.dealCode}-${Date.now()}`,
+      reference,
       metadata: { transactionId: tx.id, dealCode: tx.dealCode },
+      callbackUrl: `${process.env.APP_URL}/payment/success`,
+    });
+
+    // Store reference for reconciliation
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: { paystackRef: reference },
     });
 
     res.json({ authorizationUrl: data.authorization_url });

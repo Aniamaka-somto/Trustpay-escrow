@@ -35,6 +35,7 @@ export const initializePayment = async ({
   amountKobo,
   reference,
   metadata,
+  callbackUrl,
 }) => {
   try {
     const { data } = await axios.post(
@@ -44,7 +45,7 @@ export const initializePayment = async ({
         amount: Number(amountKobo),
         reference,
         metadata,
-        callback_url: `${process.env.APP_URL}/payment/callback`,
+        callback_url: callbackUrl ?? `${process.env.APP_URL}/payment/callback`,
       },
       { headers: headers() },
     );
@@ -58,9 +59,7 @@ export const verifyTransaction = async (reference) => {
   try {
     const { data } = await axios.get(
       `${BASE}/transaction/verify/${reference}`,
-      {
-        headers: headers(),
-      },
+      { headers: headers() },
     );
     return data.data;
   } catch (err) {
